@@ -11,19 +11,11 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QRadioButton>
 #include <QButtonGroup>
+#include "trace.h"  // Добавляем заголовочный файл трассировки
 
 namespace Ui {
 class MainWindow;
 }
-
-// Типы ячеек сетки
-enum CellType {
-    CELL_EMPTY,
-    CELL_OBSTACLE,
-    CELL_PAD,
-    CELL_TRACE,
-    CELL_VIA
-};
 
 // Структура для представления контактной площадки
 struct Pad {
@@ -42,28 +34,6 @@ struct Connection {
     bool routed;
     int layer;
     QGraphicsLineItem* visualLine; // Визуализация связи
-};
-
-// Структура ячейки сетки
-struct GridCell {
-    CellType type;
-    int layer;
-    int padId; // если это площадка
-    int traceId; // если это трасса
-    QColor color;
-};
-
-// Простая структура для хранения точек сетки
-struct GridPoint {
-    int x;
-    int y;
-
-    GridPoint() : x(0), y(0) {}
-    GridPoint(int x_, int y_) : x(x_), y(y_) {}
-
-    bool operator==(const GridPoint& other) const {
-        return x == other.x && y == other.y;
-    }
 };
 
 class CustomGraphicsScene : public QGraphicsScene
@@ -113,12 +83,13 @@ private:
     Ui::MainWindow *ui;
     CustomGraphicsScene *scene;
     QButtonGroup *layerButtonGroup;
+    PathFinder pathFinder;  // Добавляем объект для поиска пути
 
     // Параметры платы
     int gridSize = 30;
     int boardWidth = 10; // Теперь настраиваемые параметры
-    int boardHeight = 15;
-    int layerCount = 4;
+    int boardHeight = 10;
+    int layerCount = 2;  // Изменено с 4 на 2
     int currentLayer = 0;
 
     // Режимы работы
@@ -156,7 +127,7 @@ private:
     void drawConnectionLine(int padId1, int padId2); // Рисуем визуальную линию связи
     void updateConnectionLines(); // Обновляем все линии связей
 
-    // Алгоритм трассировки
+    // Методы для работы с трассировкой (теперь используют PathFinder)
     QList<GridPoint> findPath(const GridPoint& start, const GridPoint& end, int layer);
     bool canPlaceTrace(int x, int y, int layer);
     void placeVia(int x, int y);

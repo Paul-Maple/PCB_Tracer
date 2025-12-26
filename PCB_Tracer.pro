@@ -9,9 +9,11 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
+    trace.cpp \           # Добавляем новый файл
 
 HEADERS += \
     mainwindow.h \
+    trace.h \             # Добавляем новый файл
 
 FORMS += \
     mainwindow.ui

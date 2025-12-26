@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include "trace.h"  // Добавляем заголовочный файл трассировки
 #include <QGraphicsRectItem>
 #include <QGraphicsLineItem>
 #include <QMessageBox>
@@ -7,10 +8,10 @@
 #include <QBrush>
 #include <QPen>
 #include <cmath>
-#include <QDebug>
 #include <QVBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QSizePolicy>  // Добавляем для управления размером
 
 // Реализация метода mousePressEvent для CustomGraphicsScene
 void CustomGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent *event)
@@ -32,12 +33,13 @@ MainWindow::MainWindow(QWidget *parent) :
 {
     ui->setupUi(this);
 
+    // Устанавливаем начальное количество слоев на 2
+    layerCount = 2;
+    ui->layerSpinBox->setValue(layerCount);
+
     // Создаем кастомную сцену
     scene = new CustomGraphicsScene(this);
     ui->graphicsView->setScene(scene);
-
-    // Настройка интерфейса
-    ui->layerSpinBox->setValue(layerCount);
 
     // Создаем радио-кнопки для слоев
     createLayerRadioButtons();
@@ -61,8 +63,6 @@ MainWindow::MainWindow(QWidget *parent) :
     // Инициализация сетки
     initGrid();
     drawGrid();
-
-    qDebug() << "MainWindow initialized";
 }
 
 MainWindow::~MainWindow()
@@ -96,9 +96,13 @@ void MainWindow::createLayerRadioButtons()
     QVBoxLayout *layerLayout = new QVBoxLayout(layerGroupBox);
 
     // Создаем радио-кнопки для каждого слоя
-    for (int i = 0; i < layerCount; i++) {
+    for (int i = 0; i < 8; i++) { // Всегда создаем 8 кнопок, но некоторые будут отключены
         QRadioButton *radioBtn = new QRadioButton(QString("Слой %1").arg(i + 1), layerGroupBox);
         radioBtn->setStyleSheet(QString("QRadioButton { color: %1; }").arg(layerColors[i].name()));
+
+        // Отключаем кнопки для слоев, которые больше текущего количества
+        radioBtn->setEnabled(i < layerCount);
+
         layerButtonGroup->addButton(radioBtn, i);
         layerLayout->addWidget(radioBtn);
     }
@@ -106,6 +110,7 @@ void MainWindow::createLayerRadioButtons()
     // Выбираем первый слой по умолчанию
     if (layerButtonGroup->button(0)) {
         layerButtonGroup->button(0)->setChecked(true);
+        currentLayer = 0;
     }
 
     // Подключаем сигнал изменения выбора
@@ -121,7 +126,6 @@ void MainWindow::onLayerRadioButtonClicked()
     int newLayer = layerButtonGroup->checkedId();
     if (newLayer >= 0 && newLayer < layerCount && newLayer != currentLayer) {
         currentLayer = newLayer;
-        qDebug() << "Layer changed to:" << currentLayer;
         drawGrid(); // Обновляем отображение
         ui->statusBar->showMessage(QString("Текущий слой: %1").arg(currentLayer + 1));
     }
@@ -129,8 +133,6 @@ void MainWindow::onLayerRadioButtonClicked()
 
 void MainWindow::initGrid()
 {
-    qDebug() << "Initializing grid...";
-
     // Выделение памяти для 3D сетки
     grid = new GridCell**[static_cast<size_t>(layerCount)];
     for (int l = 0; l < layerCount; l++) {
@@ -162,14 +164,10 @@ void MainWindow::initGrid()
             cells[y][x] = rect;
         }
     }
-
-    qDebug() << "Grid initialized. Pads count:" << pads.size();
 }
 
 void MainWindow::clearGrid()
 {
-    qDebug() << "Clearing grid...";
-
     // Очистка данных
     pads.clear();
 
@@ -213,8 +211,6 @@ void MainWindow::clearGrid()
     if (scene) {
         scene->clear();
     }
-
-    qDebug() << "Grid cleared. Pads count:" << pads.size();
 }
 
 void MainWindow::drawGrid()
@@ -372,30 +368,21 @@ void MainWindow::updateCellDisplay(int x, int y, int layer)
 
 void MainWindow::onCellClicked(int x, int y)
 {
-    qDebug() << "\n=== Cell clicked at: (" << x << "," << y << ") ===";
-    qDebug() << "Current mode:" << currentMode;
-    qDebug() << "Current layer:" << currentLayer;
-    qDebug() << "Total pads:" << pads.size();
-
     // Проверяем границы
     if (x < 0 || x >= boardWidth || y < 0 || y >= boardHeight) {
-        qDebug() << "ERROR: Click out of bounds";
+        ui->statusBar->showMessage("Ошибка: клик вне границ платы");
         return;
     }
 
     switch (currentMode) {
     case MODE_OBSTACLE:
-        qDebug() << "Mode: OBSTACLE";
-
         // Проверяем, нет ли площадки в этой точке
         if (hasPadAt(x, y)) {
-            qDebug() << "ERROR: Cannot place obstacle on pad!";
             QMessageBox::warning(this, "Ошибка",
                 "Нельзя установить препятствие на контактной площадке");
             return;
         }
 
-        qDebug() << "Placing obstacle at (" << x << "," << y << ") on layer" << currentLayer;
         grid[currentLayer][y][x].type = CELL_OBSTACLE;
         grid[currentLayer][y][x].color = Qt::darkGray;
         updateCellDisplay(x, y);
@@ -403,11 +390,8 @@ void MainWindow::onCellClicked(int x, int y)
         break;
 
     case MODE_PAD: {
-        qDebug() << "Mode: PAD";
-
         // Проверяем, нет ли уже площадки в этой точке
         if (hasPadAt(x, y)) {
-            qDebug() << "ERROR: Pad already exists at (" << x << "," << y << ")";
             QMessageBox::warning(this, "Ошибка",
                 "В этой точке уже есть контактная площадка");
             return;
@@ -415,21 +399,24 @@ void MainWindow::onCellClicked(int x, int y)
 
         // Проверяем, нет ли препятствия на текущем слое
         if (grid[currentLayer][y][x].type == CELL_OBSTACLE) {
-            qDebug() << "ERROR: Cannot place pad on obstacle";
             QMessageBox::warning(this, "Ошибка",
                 "Нельзя установить площадку на препятствии");
             return;
         }
 
+        // Создаем диалоговое окно для ввода имени площадки
         bool ok;
-        QString name = QInputDialog::getText(this, "Контактная площадка",
-                                           "Введите имя площадки:",
-                                           QLineEdit::Normal,
-                                           QString("PAD%1").arg(nextPadId),
-                                           &ok);
-        if (ok && !name.isEmpty()) {
-            qDebug() << "Creating new pad:" << name << "at (" << x << "," << y << ")";
+        QString name = QInputDialog::getText(
+            this,
+            "Контактная площадка",
+            "Введите имя площадки:",
+            QLineEdit::Normal,
+            QString("PAD%1").arg(nextPadId),
+            &ok
+        );
 
+        // Устанавливаем минимальный размер для диалога
+        if (ok && !name.isEmpty()) {
             Pad pad;
             pad.id = nextPadId;
             pad.x = x;
@@ -443,8 +430,6 @@ void MainWindow::onCellClicked(int x, int y)
 
             // Добавляем площадку в список
             pads.append(pad);
-            qDebug() << "Pad added. ID:" << pad.id << "Name:" << pad.name;
-            qDebug() << "Total pads now:" << pads.size();
 
             // Установка на всех слоях
             for (int l = 0; l < layerCount; l++) {
@@ -452,7 +437,6 @@ void MainWindow::onCellClicked(int x, int y)
                 grid[l][y][x].padId = pad.id;
                 grid[l][y][x].color = pad.color;
                 grid[l][y][x].traceId = -1;
-                qDebug() << "  Set on layer" << l;
             }
 
             nextPadId++; // Увеличиваем ID для следующей площадки
@@ -461,23 +445,13 @@ void MainWindow::onCellClicked(int x, int y)
             ui->statusBar->showMessage(
                 QString("Добавлена площадка %1 в (%2, %3)")
                 .arg(name).arg(x).arg(y));
-
-            // Выводим список всех площадок для отладки
-            qDebug() << "=== All pads ===";
-            for (int i = 0; i < pads.size(); i++) {
-                qDebug() << "  Pad" << i << ": ID =" << pads[i].id
-                         << pads[i].name << "at (" << pads[i].x << "," << pads[i].y << ")";
-            }
         }
         break;
     }
 
     case MODE_CONNECTION: {
-        qDebug() << "Mode: CONNECTION";
-
         int padId = getPadAt(x, y);
         if (padId == -1) {
-            qDebug() << "ERROR: No pad at (" << x << "," << y << ")";
             QMessageBox::warning(this, "Ошибка",
                 "Выберите контактную площадку");
             return;
@@ -486,13 +460,10 @@ void MainWindow::onCellClicked(int x, int y)
         if (selectedPadId == -1) {
             selectedPadId = padId;
             Pad* pad = getPadById(padId);
-            qDebug() << "First pad selected:" << padId << (pad ? pad->name : "?");
             ui->statusBar->showMessage(
                 QString("Выбрана площадка %1. Выберите вторую площадку для соединения")
                 .arg(pad ? pad->name : QString::number(padId)));
         } else if (selectedPadId != padId) {
-            qDebug() << "Second pad selected:" << padId;
-
             // Проверяем, нет ли уже такой связи
             bool connectionExists = false;
             for (const Connection& conn : connections) {
@@ -504,7 +475,6 @@ void MainWindow::onCellClicked(int x, int y)
             }
 
             if (connectionExists) {
-                qDebug() << "Connection already exists";
                 QMessageBox::information(this, "Информация",
                     "Связь между этими площадками уже существует");
                 selectedPadId = -1;
@@ -520,7 +490,6 @@ void MainWindow::onCellClicked(int x, int y)
             conn.visualLine = nullptr;
 
             connections.append(conn);
-            qDebug() << "Connection created between" << selectedPadId << "and" << padId;
 
             // Рисуем визуальную линию связи
             drawConnectionLine(selectedPadId, padId);
@@ -548,8 +517,6 @@ void MainWindow::onCellClicked(int x, int y)
     }
 
     default:
-        qDebug() << "Mode: NONE (info mode)";
-
         // В режиме без инструмента показываем информацию о ячейке
         QString info = QString("Ячейка (%1, %2), Слой %3: ").arg(x).arg(y).arg(currentLayer + 1);
 
@@ -564,26 +531,20 @@ void MainWindow::onCellClicked(int x, int y)
             break;
         }
         case CELL_TRACE: info += "Трасса"; break;
-        case CELL_VIA: info += "Переход (via)"; break;
+        case CELL_VIA: info += "Переход"; break;
         }
 
         ui->statusBar->showMessage(info);
-        qDebug() << info;
         break;
     }
 }
 
 void MainWindow::onRoute()
 {
-    qDebug() << "Starting routing...";
-
     if (connections.isEmpty()) {
-        qDebug() << "No connections to route";
         QMessageBox::information(this, "Информация", "Нет связей для трассировки");
         return;
     }
-
-    qDebug() << "Total connections:" << connections.size();
 
     // Очищаем сцену от старых линий трасс (но оставляем линии связей)
     QList<QGraphicsItem*> items = scene->items();
@@ -606,21 +567,16 @@ void MainWindow::onRoute()
         Pad* toPad = getPadById(conn.toPadId);
 
         if (!fromPad || !toPad) {
-            qDebug() << "ERROR: Pad not found for connection" << conn.fromPadId << "->" << conn.toPadId;
             continue;
         }
-
-        qDebug() << "Routing connection:" << fromPad->name << "->" << toPad->name;
 
         GridPoint start(fromPad->x, fromPad->y);
         GridPoint end(toPad->x, toPad->y);
 
-        // Пробуем найти путь на текущем слое
+        // Используем PathFinder для поиска пути
         QList<GridPoint> path = findPath(start, end, currentLayer);
 
         if (!path.isEmpty()) {
-            qDebug() << "Path found on layer" << currentLayer << "length:" << path.size();
-
             // Очищаем ячейки от старых трасс на текущем слое
             for (int i = 0; i < path.size(); i++) {
                 GridPoint point = path[i];
@@ -655,19 +611,14 @@ void MainWindow::onRoute()
                 GridPoint point = path[i];
                 updateCellDisplay(point.x, point.y, currentLayer);
             }
-        } else {
-            qDebug() << "No path found on layer" << currentLayer;
         }
     }
 
-    qDebug() << "Routing completed. Routed:" << routedCount << "of" << connections.size();
     ui->statusBar->showMessage(QString("Проложено трасс: %1 из %2").arg(routedCount).arg(connections.size()));
 }
 
 void MainWindow::onClearTraces()
 {
-    qDebug() << "Clearing all traces...";
-
     // Очищаем линии трасс (но оставляем линии связей)
     QList<QGraphicsItem*> items = scene->items();
     for (QGraphicsItem* item : items) {
@@ -700,21 +651,16 @@ void MainWindow::onClearTraces()
 
     drawGrid();
     ui->statusBar->showMessage("Все трассы удалены");
-    qDebug() << "Traces cleared";
 }
 
 void MainWindow::onRemovePad()
 {
-    qDebug() << "Removing pad...";
     currentMode = MODE_NONE;
 
     if (pads.isEmpty()) {
-        qDebug() << "No pads to remove";
         QMessageBox::information(this, "Информация", "Нет площадок для удаления");
         return;
     }
-
-    qDebug() << "Available pads:" << pads.size();
 
     QStringList padNames;
     for (const Pad& pad : pads) {
@@ -722,15 +668,20 @@ void MainWindow::onRemovePad()
     }
 
     bool ok;
-    QString selected = QInputDialog::getItem(this, "Удаление площадки",
-                                           "Выберите площадку для удаления:",
-                                           padNames, 0, false, &ok);
+    QString selected = QInputDialog::getItem(
+        this,
+        "Удаление площадки",
+        "Выберите площадку для удаления:",
+        padNames,
+        0,
+        false,
+        &ok
+    );
 
     if (ok && !selected.isEmpty()) {
         int index = padNames.indexOf(selected);
         if (index != -1) {
             int padId = pads[index].id;
-            qDebug() << "Removing pad ID:" << padId << pads[index].name;
 
             // Удаление связей
             QList<Connection> newConnections;
@@ -738,7 +689,6 @@ void MainWindow::onRemovePad()
                 if (conn.fromPadId != padId && conn.toPadId != padId) {
                     newConnections.append(conn);
                 } else {
-                    qDebug() << "Removing connection:" << conn.fromPadId << "->" << conn.toPadId;
                     // Удаляем визуальную линию
                     if (conn.visualLine) {
                         scene->removeItem(conn.visualLine);
@@ -765,15 +715,12 @@ void MainWindow::onRemovePad()
             drawGrid();
             updateConnectionLines(); // Обновляем линии связей
             ui->statusBar->showMessage("Площадка удалена");
-            qDebug() << "Pad removed. Remaining pads:" << pads.size();
         }
     }
 }
 
 void MainWindow::onLayerCountChanged(int count)
 {
-    qDebug() << "Changing layer count from" << layerCount << "to" << count;
-
     clearGrid();
     layerCount = qMin(count, 8);
     layerCount = qMax(layerCount, 1);
@@ -793,17 +740,33 @@ void MainWindow::onLayerCountChanged(int count)
     drawGrid();
 
     ui->statusBar->showMessage(QString("Установлено %1 слоев").arg(layerCount));
-    qDebug() << "Layer count changed to:" << layerCount;
 }
 
 // Добавляем новую функцию для изменения размера платы
 void MainWindow::onBoardSizeChanged()
 {
     bool okWidth, okHeight;
-    int newWidth = QInputDialog::getInt(this, "Размер платы", "Ширина (количество клеток):",
-                                       boardWidth, 5, 100, 1, &okWidth);
-    int newHeight = QInputDialog::getInt(this, "Размер платы", "Высота (количество клеток):",
-                                        boardHeight, 5, 100, 1, &okHeight);
+    int newWidth = QInputDialog::getInt(
+        this,
+        "Размер платы",
+        "Ширина (количество клеток):",
+        boardWidth,
+        5,
+        100,
+        1,
+        &okWidth
+    );
+
+    int newHeight = QInputDialog::getInt(
+        this,
+        "Размер платы",
+        "Высота (количество клеток):",
+        boardHeight,
+        5,
+        100,
+        1,
+        &okHeight
+    );
 
     if (okWidth && okHeight && (newWidth != boardWidth || newHeight != boardHeight)) {
         boardWidth = newWidth;
@@ -814,137 +777,22 @@ void MainWindow::onBoardSizeChanged()
         drawGrid();
 
         ui->statusBar->showMessage(QString("Размер платы изменен: %1x%2").arg(boardWidth).arg(boardHeight));
-        qDebug() << "Board size changed to:" << boardWidth << "x" << boardHeight;
     }
 }
 
+// Обёртки для методов трассировки, которые теперь используют PathFinder
 QList<GridPoint> MainWindow::findPath(const GridPoint& start, const GridPoint& end, int layer)
 {
-    QList<GridPoint> path;
-
-    if (start.x < 0 || start.x >= boardWidth || start.y < 0 || start.y >= boardHeight ||
-        end.x < 0 || end.x >= boardWidth || end.y < 0 || end.y >= boardHeight) {
-        qDebug() << "Invalid start or end point";
-        return path;
-    }
-
-    if (!canPlaceTrace(start.x, start.y, layer) ||
-        !canPlaceTrace(end.x, end.y, layer)) {
-        qDebug() << "Cannot place trace at start or end";
-        return path;
-    }
-
-    qDebug() << "Finding path from (" << start.x << "," << start.y
-             << ") to (" << end.x << "," << end.y << ") on layer" << layer;
-
-    // Инициализируем матрицу расстояний
-    int** dist = new int*[static_cast<size_t>(boardHeight)];
-    for (int y = 0; y < boardHeight; y++) {
-        dist[y] = new int[static_cast<size_t>(boardWidth)];
-        for (int x = 0; x < boardWidth; x++) {
-            dist[y][x] = -1;
-        }
-    }
-
-    // Очередь для волнового алгоритма
-    QList<GridPoint> queue;
-    dist[start.y][start.x] = 0;
-    queue.append(start);
-
-    // Направления: вправо, влево, вниз, вверх
-    int dx[4] = {1, -1, 0, 0};
-    int dy[4] = {0, 0, 1, -1};
-
-    // Волновой алгоритм (алгоритм Ли)
-    bool found = false;
-    while (!queue.isEmpty() && !found) {
-        GridPoint current = queue.takeFirst();
-
-        for (int i = 0; i < 4; i++) {
-            int nx = current.x + dx[i];
-            int ny = current.y + dy[i];
-
-            if (nx >= 0 && nx < boardWidth && ny >= 0 && ny < boardHeight) {
-                if ((nx == end.x && ny == end.y) || canPlaceTrace(nx, ny, layer)) {
-                    if (dist[ny][nx] == -1) {
-                        dist[ny][nx] = dist[current.y][current.x] + 1;
-                        queue.append(GridPoint(nx, ny));
-
-                        if (nx == end.x && ny == end.y) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Восстанавливаем путь если нашли
-    if (found) {
-        GridPoint current = end;
-        while (!(current.x == start.x && current.y == start.y)) {
-            path.prepend(current);
-
-            // Ищем предыдущую точку
-            bool foundPrev = false;
-            for (int i = 0; i < 4; i++) {
-                int nx = current.x + dx[i];
-                int ny = current.y + dy[i];
-
-                if (nx >= 0 && nx < boardWidth && ny >= 0 && ny < boardHeight) {
-                    if (dist[ny][nx] == dist[current.y][current.x] - 1) {
-                        current = GridPoint(nx, ny);
-                        foundPrev = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!foundPrev) break;
-        }
-        path.prepend(start);
-
-        qDebug() << "Path found with length:" << path.size();
-    } else {
-        qDebug() << "No path found";
-    }
-
-    // Очистка памяти
-    for (int y = 0; y < boardHeight; y++) {
-        delete[] dist[y];
-    }
-    delete[] dist;
-
-    return path;
+    return pathFinder.findPath(start, end, layer, grid, boardWidth, boardHeight);
 }
 
 bool MainWindow::canPlaceTrace(int x, int y, int layer)
 {
-    // Проверяем границы
-    if (x < 0 || x >= boardWidth || y < 0 || y >= boardHeight) {
-        return false;
-    }
-
-    // Проверяем тип ячейки
-    CellType type = grid[layer][y][x].type;
-
-    // Можно разместить трассу, если ячейка пустая
-    // или это площадка (можно подключиться)
-    bool canPlace = (type == CELL_EMPTY || type == CELL_PAD || type == CELL_VIA);
-
-    if (!canPlace) {
-        qDebug() << "Cannot place trace at (" << x << "," << y << ") layer" << layer
-                 << "type:" << type;
-    }
-
-    return canPlace;
+    return pathFinder.canPlaceTrace(x, y, layer, grid, boardWidth, boardHeight);
 }
 
 void MainWindow::placeVia(int x, int y)
 {
-    qDebug() << "Placing via at (" << x << "," << y << ")";
-
     for (int l = 0; l < layerCount; l++) {
         // Не ставим переход на препятствия или другие трассы
         if (grid[l][y][x].type == CELL_OBSTACLE || grid[l][y][x].type == CELL_TRACE) {
@@ -989,8 +837,6 @@ bool MainWindow::hasPadAt(int x, int y)
     // Простая проверка по списку площадок
     for (const Pad& pad : pads) {
         if (pad.x == x && pad.y == y) {
-            qDebug() << "Found pad at (" << x << "," << y << "): ID =" << pad.id
-                     << "Name =" << pad.name;
             return true;
         }
     }
@@ -998,13 +844,10 @@ bool MainWindow::hasPadAt(int x, int y)
     // Дополнительная проверка по сетке (на всякий случай)
     for (int l = 0; l < layerCount; l++) {
         if (grid[l][y][x].type == CELL_PAD) {
-            qDebug() << "WARNING: Grid shows pad at (" << x << "," << y
-                     << ") layer" << l << "but not in pads list!";
             return true;
         }
     }
 
-    qDebug() << "No pad found at (" << x << "," << y << ")";
     return false;
 }
 
@@ -1033,7 +876,6 @@ void MainWindow::updatePadConnections()
 
 void MainWindow::onRemoveObstacle()
 {
-    qDebug() << "Removing all obstacles...";
     currentMode = MODE_NONE;
 
     for (int y = 0; y < boardHeight; y++) {
@@ -1049,21 +891,18 @@ void MainWindow::onRemoveObstacle()
 
     drawGrid();
     ui->statusBar->showMessage("Все препятствия удалены");
-    qDebug() << "Obstacles removed";
 }
 
 void MainWindow::setModeObstacle()
 {
     currentMode = MODE_OBSTACLE;
     ui->statusBar->showMessage("Режим: установка препятствий. Кликните на ячейку.");
-    qDebug() << "Mode set to: OBSTACLE";
 }
 
 void MainWindow::setModePad()
 {
     currentMode = MODE_PAD;
     ui->statusBar->showMessage("Режим: установка контактных площадок. Кликните на ячейку.");
-    qDebug() << "Mode set to: PAD";
 }
 
 void MainWindow::setModeConnection()
@@ -1071,7 +910,6 @@ void MainWindow::setModeConnection()
     currentMode = MODE_CONNECTION;
     selectedPadId = -1;
     ui->statusBar->showMessage("Режим: создание связей. Выберите первую площадку.");
-    qDebug() << "Mode set to: CONNECTION";
 }
 
 // Обработчики кнопок (обертки для слота)
@@ -1089,3 +927,4 @@ void MainWindow::onSetConnection()
 {
     setModeConnection();
 }
+
