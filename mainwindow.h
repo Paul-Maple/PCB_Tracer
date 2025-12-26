@@ -11,29 +11,32 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QRadioButton>
 #include <QButtonGroup>
-#include "trace.h"  // Добавляем заголовочный файл трассировки
+#include "trace.h"
 
 namespace Ui {
 class MainWindow;
 }
 
-// Структура для представления контактной площадки
 struct Pad {
     int id;
     int x;
     int y;
     QString name;
     QColor color;
-    QList<int> connections; // ID подключенных площадок
+    QList<int> connections;
 };
 
-// Структура для представления связи
 struct Connection {
     int fromPadId;
     int toPadId;
     bool routed;
     int layer;
-    QGraphicsLineItem* visualLine; // Визуализация связи
+    QGraphicsLineItem* visualLine;
+};
+
+struct TraceLineInfo {
+    QGraphicsLineItem* line;
+    int layer;
 };
 
 class CustomGraphicsScene : public QGraphicsScene
@@ -69,7 +72,7 @@ private slots:
     void onRemoveObstacle();
     void onRemovePad();
     void onLayerCountChanged(int count);
-    void onBoardSizeChanged(); // Для изменения размера платы
+    void onBoardSizeChanged();
 
     // Режимы работы
     void setModeObstacle();
@@ -83,13 +86,14 @@ private:
     Ui::MainWindow *ui;
     CustomGraphicsScene *scene;
     QButtonGroup *layerButtonGroup;
-    PathFinder pathFinder;  // Добавляем объект для поиска пути
-
+    PathFinder pathFinder;
+QList<TraceLineInfo> traceLinesInfo;
+void updateTraceLinesForCurrentLayer();
     // Параметры платы
     int gridSize = 30;
-    int boardWidth = 10; // Теперь настраиваемые параметры
+    int boardWidth = 10;
     int boardHeight = 10;
-    int layerCount = 2;  // Изменено с 4 на 2
+    int layerCount = 2;
     int currentLayer = 0;
 
     // Режимы работы
@@ -99,7 +103,7 @@ private:
     // Данные
     QList<Pad> pads;
     QList<Connection> connections;
-    GridCell*** grid; // 3D массив: [layer][y][x]
+    GridCell*** grid;
 
     // Визуализация
     QGraphicsRectItem*** cells;
@@ -108,14 +112,14 @@ private:
 
     // Цвета для слоев
     QList<QColor> layerColors = {
-        QColor(255, 0, 0),    // Красный - слой 1
-        QColor(0, 255, 0),    // Зеленый - слой 2
-        QColor(0, 0, 255),    // Синий - слой 3
-        QColor(255, 255, 0),  // Желтый - слой 4
-        QColor(255, 0, 255),  // Пурпурный - слой 5
-        QColor(0, 255, 255),  // Голубой - слой 6
-        QColor(255, 165, 0),  // Оранжевый - слой 7
-        QColor(128, 0, 128)   // Фиолетовый - слой 8
+        QColor(255, 0, 0),
+        QColor(0, 255, 0),
+        QColor(0, 0, 255),
+        QColor(255, 255, 0),
+        QColor(255, 0, 255),
+        QColor(0, 255, 255),
+        QColor(255, 165, 0),
+        QColor(128, 0, 128)
     };
 
     // Инициализация
@@ -124,13 +128,19 @@ private:
     void drawGrid();
     void updateCellDisplay(int x, int y, int layer = -1);
     void drawTraceLine(const GridPoint& from, const GridPoint& to, int layer);
-    void drawConnectionLine(int padId1, int padId2); // Рисуем визуальную линию связи
-    void updateConnectionLines(); // Обновляем все линии связей
+    void drawConnectionLine(int padId1, int padId2);
+    void updateConnectionLines();
 
-    // Методы для работы с трассировкой (теперь используют PathFinder)
-    QList<GridPoint> findPath(const GridPoint& start, const GridPoint& end, int layer);
-    bool canPlaceTrace(int x, int y, int layer);
+    // Методы для работы с трассировкой (с новой сигнатурой)
+    QList<GridPoint> findPath(const GridPoint& start, const GridPoint& end, int currentPadId);
+    bool canPlaceTrace(int x, int y, int layer, int currentPadId);
     void placeVia(int x, int y);
+
+    // Новые методы для алгоритма Хейса
+    void performMultilayerRouting();
+    void updateCellDisplayWithLayerHighlight(int x, int y, int layer = -1);
+    QColor getLayerColor(int layer, bool isActiveLayer);
+    void removeConnectionLines();
 
     // Вспомогательные методы
     Pad* getPadById(int id);

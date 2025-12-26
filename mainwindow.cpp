@@ -1,6 +1,6 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
-#include "trace.h"  // Добавляем заголовочный файл трассировки
+#include "trace.h"
 #include <QGraphicsRectItem>
 #include <QGraphicsLineItem>
 #include <QMessageBox>
@@ -11,9 +11,10 @@
 #include <QVBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
-#include <QSizePolicy>  // Добавляем для управления размером
+#include <QSizePolicy>
+#include <algorithm>
+#include <QDebug>
 
-// Реализация метода mousePressEvent для CustomGraphicsScene
 void CustomGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     QPointF scenePos = event->scenePos();
@@ -126,8 +127,29 @@ void MainWindow::onLayerRadioButtonClicked()
     int newLayer = layerButtonGroup->checkedId();
     if (newLayer >= 0 && newLayer < layerCount && newLayer != currentLayer) {
         currentLayer = newLayer;
-        drawGrid(); // Обновляем отображение
+
+        // Обновляем существующие линии трасс
+        updateTraceLinesForCurrentLayer();
+
+        drawGrid(); // Обновляем отображение ячеек
         ui->statusBar->showMessage(QString("Текущий слой: %1").arg(currentLayer + 1));
+    }
+}
+
+void MainWindow::updateTraceLinesForCurrentLayer()
+{
+    // Обновляем все линии трасс в списке
+    for (TraceLineInfo& info : traceLinesInfo) {
+        if (info.line) {
+            int lineLayer = info.layer;
+            QColor newColor = getLayerColor(lineLayer, lineLayer == currentLayer);
+            int lineWidth = (lineLayer == currentLayer) ? 4 : 2;
+            Qt::PenStyle lineStyle = (lineLayer == currentLayer) ? Qt::SolidLine : Qt::DashLine;
+            qreal opacity = (lineLayer == currentLayer) ? 1.0 : 0.6;
+
+            info.line->setPen(QPen(newColor, lineWidth, lineStyle, Qt::RoundCap));
+            info.line->setOpacity(opacity);
+        }
     }
 }
 
@@ -181,6 +203,15 @@ void MainWindow::clearGrid()
     }
     connections.clear();
 
+    // Удаляем линии трасс
+    for (TraceLineInfo& info : traceLinesInfo) {
+        if (info.line) {
+            scene->removeItem(info.line);
+            delete info.line;
+        }
+    }
+    traceLinesInfo.clear();
+
     nextPadId = 1;
     selectedPadId = -1;
 
@@ -228,7 +259,7 @@ void MainWindow::drawTraceLine(const GridPoint& from, const GridPoint& to, int l
 {
     if (layer < 0 || layer >= layerCount) return;
 
-    QColor traceColor = layerColors[layer];
+    QColor traceColor = getLayerColor(layer, layer == currentLayer);
 
     // Вычисляем координаты центров ячеек
     qreal x1 = from.x * gridSize + gridSize / 2.0;
@@ -236,11 +267,27 @@ void MainWindow::drawTraceLine(const GridPoint& from, const GridPoint& to, int l
     qreal x2 = to.x * gridSize + gridSize / 2.0;
     qreal y2 = to.y * gridSize + gridSize / 2.0;
 
-    // Рисуем тонкую линию между центрами ячеек
-    scene->addLine(
+    // Определяем толщину и стиль линии в зависимости от того, активен ли слой
+    int lineWidth = (layer == currentLayer) ? 4 : 2;
+    Qt::PenStyle lineStyle = (layer == currentLayer) ? Qt::SolidLine : Qt::DashLine;
+    qreal opacity = (layer == currentLayer) ? 1.0 : 0.6; // Более яркие линии на активном слое
+
+    // Рисуем линию между центрами ячеек
+    QGraphicsLineItem* line = scene->addLine(
         x1, y1, x2, y2,
-        QPen(traceColor, 3, Qt::SolidLine, Qt::RoundCap)
+        QPen(traceColor, lineWidth, lineStyle, Qt::RoundCap)
     );
+
+    // Сохраняем информацию о линии
+    TraceLineInfo info;
+    info.line = line;
+    info.layer = layer;
+    traceLinesInfo.append(info);
+
+    // Устанавливаем прозрачность для неактивных слоев
+    if (layer != currentLayer) {
+        line->setOpacity(opacity);
+    }
 }
 
 void MainWindow::drawConnectionLine(int padId1, int padId2)
@@ -319,51 +366,42 @@ void MainWindow::updateCellDisplay(int x, int y, int layer)
     QColor color = cell.color;
     QPen pen(Qt::black, 1);
 
-    // Для визуализации: если ячейка пустая на текущем слое,
-    // показываем самый верхний непустой слой
-    if (cell.type == CELL_EMPTY && layer == currentLayer) {
-        for (int l = layerCount - 1; l >= 0; l--) {
-            if (grid[l][y][x].type != CELL_EMPTY) {
-                cell = grid[l][y][x]; // Используем ячейку с верхнего слоя
-                color = cell.color;
-                break;
-            }
-        }
-    }
+    // Определяем, активен ли этот слой
+    bool isActiveLayer = (layer == currentLayer);
 
-    // Настройка пера в зависимости от типа ячейки
-    switch (cell.type) {
-    case CELL_OBSTACLE:
-        pen = QPen(Qt::darkGray, 2);
-        color = Qt::darkGray;
-        break;
-    case CELL_TRACE:
-        // Для трасс показываем только на их слое
-        if (layer == cell.layer) {
-            // Ячейки трасс оставляем белыми, линии рисуем отдельно
-            pen = QPen(Qt::gray, 1);
-            color = Qt::white;
-        } else {
-            // На других слоях трассы не видны
-            pen = QPen(Qt::gray, 1);
-            color = Qt::white;
-        }
-        break;
-    case CELL_VIA:
-        pen = QPen(Qt::black, 3);
+    // Для трасс - ячейки должны оставаться пустыми (белыми)
+    if (cell.type == CELL_TRACE) {
+        color = Qt::white; // Ячейка остается белой
+        pen = QPen(Qt::gray, 1); // Тонкая серая граница
+
+        // НЕ подсвечиваем ячейки трасс
+        // Вместо этого трассы будут отображаться только линиями
+    }
+    // Для виа всегда черный (ячейка под виа)
+    else if (cell.type == CELL_VIA) {
         color = Qt::black;
-        break;
-    case CELL_PAD:
-        // Площадки всегда видны
+        pen = QPen(Qt::black, 2);
+    }
+    // Для препятствий серый
+    else if (cell.type == CELL_OBSTACLE) {
+        color = Qt::darkGray;
+        pen = QPen(Qt::darkGray, 2);
+    }
+    // Для площадок оставляем оригинальный цвет
+    else if (cell.type == CELL_PAD) {
         pen = QPen(color.darker(), 2);
-        break;
-    default:
+    }
+    // Для пустых ячеек
+    else {
+        color = Qt::white;
         pen = QPen(Qt::gray, 1);
-        break;
     }
 
     rect->setBrush(QBrush(color));
     rect->setPen(pen);
+
+    // Сброс прозрачности
+    rect->setOpacity(1.0);
 }
 
 void MainWindow::onCellClicked(int x, int y)
@@ -546,108 +584,169 @@ void MainWindow::onRoute()
         return;
     }
 
-    // Очищаем сцену от старых линий трасс (но оставляем линии связей)
-    QList<QGraphicsItem*> items = scene->items();
-    for (QGraphicsItem* item : items) {
-        if (QGraphicsLineItem* lineItem = dynamic_cast<QGraphicsLineItem*>(item)) {
-            QPen pen = lineItem->pen();
-            // Удаляем только линии трасс (толстые и цветные)
-            if (pen.width() >= 2 && pen.color() != Qt::black) {
-                scene->removeItem(lineItem);
-                delete lineItem;
-            }
-        }
-    }
+    // Очищаем старые трассы
+    onClearTraces();
 
+    // Выполняем многослойную трассировку
+    performMultilayerRouting();
+
+    // Удаляем линии связей после трассировки
+    removeConnectionLines();
+
+    // Обновляем отображение
+    drawGrid();
+    ui->statusBar->showMessage("Трассировка завершена");
+}
+
+void MainWindow::performMultilayerRouting()
+{
     int routedCount = 0;
 
-    // Пробуем трассировать каждую связь
-    for (Connection& conn : connections) {
+    // Сортируем соединения по сложности (по расстоянию между площадками)
+    QList<Connection> sortedConnections = connections;
+    std::sort(sortedConnections.begin(), sortedConnections.end(),
+              [this](const Connection& a, const Connection& b) {
+                  Pad* padA1 = getPadById(a.fromPadId);
+                  Pad* padA2 = getPadById(a.toPadId);
+                  Pad* padB1 = getPadById(b.fromPadId);
+                  Pad* padB2 = getPadById(b.toPadId);
+
+                  if (!padA1 || !padA2 || !padB1 || !padB2) return false;
+
+                  int distA = abs(padA1->x - padA2->x) + abs(padA1->y - padA2->y);
+                  int distB = abs(padB1->x - padB2->x) + abs(padB1->y - padB2->y);
+
+                  return distA < distB; // Сначала простые соединения
+              });
+
+    qDebug() << "Начинаем трассировку" << sortedConnections.size() << "соединений";
+
+    // Трассируем каждое соединение
+    for (Connection& conn : sortedConnections) {
         Pad* fromPad = getPadById(conn.fromPadId);
         Pad* toPad = getPadById(conn.toPadId);
 
         if (!fromPad || !toPad) {
+            qDebug() << "Пропускаем соединение: не найдены площадки";
             continue;
         }
 
-        GridPoint start(fromPad->x, fromPad->y);
-        GridPoint end(toPad->x, toPad->y);
+        qDebug() << "Трассируем соединение от" << fromPad->name << "(ID:" << fromPad->id
+                 << ") до" << toPad->name << "(ID:" << toPad->id << ")";
 
-        // Используем PathFinder для поиска пути
-        QList<GridPoint> path = findPath(start, end, currentLayer);
+        // Ищем путь с использованием алгоритма Хейса
+        // Начинаем от первой площадки
+        GridPoint start(fromPad->x, fromPad->y, 0);
+
+        // Цель - вторая площадка
+        // ВАЖНО: передаем ID первой площадки (fromPad->id) для поиска пути,
+        // потому что трасса принадлежит этому соединению
+        GridPoint end(toPad->x, toPad->y, 0);
+
+        QList<GridPoint> path = findPath(start, end, fromPad->id);
+
+        qDebug() << "Найден путь длиной:" << path.size();
 
         if (!path.isEmpty()) {
-            // Очищаем ячейки от старых трасс на текущем слое
-            for (int i = 0; i < path.size(); i++) {
-                GridPoint point = path[i];
-                if (grid[currentLayer][point.y][point.x].type != CELL_PAD) {
-                    grid[currentLayer][point.y][point.x].type = CELL_EMPTY;
-                    grid[currentLayer][point.y][point.x].color = Qt::white;
+                // Прокладываем трассу по найденному пути
+                for (int i = 0; i < path.size(); i++) {
+                    GridPoint point = path[i];
+
+                    // Убедимся, что точка в пределах сетки
+                    if (point.x < 0 || point.x >= boardWidth ||
+                        point.y < 0 || point.y >= boardHeight ||
+                        point.layer < 0 || point.layer >= layerCount) {
+                        qDebug() << "Точка пути вне границ:" << point.x << point.y << point.layer;
+                        continue;
+                    }
+
+                    GridCell& cell = grid[point.layer][point.y][point.x];
+
+                    // НЕ устанавливаем тип CELL_TRACE для ячеек
+                    // Трассы будут отображаться только линиями
+                    // Записываем информацию о трассе в ячейку
+                    if (cell.type != CELL_PAD) {
+                        cell.type = CELL_TRACE;
+                        cell.traceId = fromPad->id; // ID первой площадки как идентификатор трассы
+                        cell.layer = point.layer;
+                        // Не устанавливаем цвет, так как ячейки трасс остаются белыми
+                    }
+
+                    // Если это переход между слоями, отмечаем как VIA
+                    if (i > 0 && path[i-1].layer != point.layer) {
+                        qDebug() << "Переход между слоями" << path[i-1].layer << "->" << point.layer;
+
+                        // Делаем via на всех промежуточных слоях
+                        int minLayer = qMin(path[i-1].layer, point.layer);
+                        int maxLayer = qMax(path[i-1].layer, point.layer);
+
+                        for (int l = minLayer; l <= maxLayer; l++) {
+                            if (l >= 0 && l < layerCount) {
+                                if (grid[l][point.y][point.x].type != CELL_PAD) {
+                                    grid[l][point.y][point.x].type = CELL_VIA;
+                                    grid[l][point.y][point.x].color = Qt::black;
+                                }
+                            }
+                        }
+                    }
+
+                    updateCellDisplay(point.x, point.y, point.layer);
                 }
-            }
 
-            // Рисуем тонкие линии между точками пути
-            for (int i = 0; i < path.size() - 1; i++) {
-                drawTraceLine(path[i], path[i + 1], currentLayer);
-            }
-
-            // Помечаем ячейки как трассы (но не закрашиваем их)
-            for (int i = 0; i < path.size(); i++) {
-                GridPoint point = path[i];
-                // Не перезаписываем площадки
-                if (grid[currentLayer][point.y][point.x].type != CELL_PAD) {
-                    grid[currentLayer][point.y][point.x].type = CELL_TRACE;
-                    grid[currentLayer][point.y][point.x].traceId = conn.fromPadId;
-                    grid[currentLayer][point.y][point.x].color = layerColors[currentLayer];
+                // Рисуем линии трасс
+                for (int i = 0; i < path.size() - 1; i++) {
+                    drawTraceLine(path[i], path[i + 1], path[i].layer);
                 }
-            }
 
-            conn.routed = true;
-            conn.layer = currentLayer;
-            routedCount++;
+                conn.routed = true;
+                conn.layer = path.last().layer;
+                routedCount++;
 
-            // Обновляем отображение всех затронутых ячеек
-            for (int i = 0; i < path.size(); i++) {
-                GridPoint point = path[i];
-                updateCellDisplay(point.x, point.y, currentLayer);
-            }
+                qDebug() << "Соединение" << fromPad->name << "-" << toPad->name << "проложено";
+            } else {
+            qDebug() << "Не удалось найти путь для соединения" << fromPad->name << "-" << toPad->name;
+            ui->statusBar->showMessage(QString("Не удалось найти путь для соединения %1-%2")
+                .arg(fromPad->name).arg(toPad->name));
         }
     }
 
     ui->statusBar->showMessage(QString("Проложено трасс: %1 из %2").arg(routedCount).arg(connections.size()));
+    qDebug() << "Трассировка завершена:" << routedCount << "из" << connections.size() << "соединений";
 }
 
 void MainWindow::onClearTraces()
 {
-    // Очищаем линии трасс (но оставляем линии связей)
-    QList<QGraphicsItem*> items = scene->items();
-    for (QGraphicsItem* item : items) {
-        if (QGraphicsLineItem* lineItem = dynamic_cast<QGraphicsLineItem*>(item)) {
-            QPen pen = lineItem->pen();
-            // Удаляем только линии трасс (толстые и цветные)
-            if (pen.width() >= 2 && pen.color() != Qt::black) {
-                scene->removeItem(lineItem);
-                delete lineItem;
-            }
+    // Очищаем линии трасс
+    for (TraceLineInfo& info : traceLinesInfo) {
+        if (info.line) {
+            scene->removeItem(info.line);
+            delete info.line;
         }
     }
+    traceLinesInfo.clear();
 
+    // Очищаем ячейки трасс и виа
     for (int l = 0; l < layerCount; l++) {
         for (int y = 0; y < boardHeight; y++) {
             for (int x = 0; x < boardWidth; x++) {
-                if (grid[l][y][x].type == CELL_TRACE) {
+                if (grid[l][y][x].type == CELL_TRACE || grid[l][y][x].type == CELL_VIA) {
                     grid[l][y][x].type = CELL_EMPTY;
                     grid[l][y][x].traceId = -1;
                     grid[l][y][x].color = Qt::white;
+                    updateCellDisplay(x, y, l);
                 }
             }
         }
     }
 
+    // Сбрасываем статус связей
     for (Connection& conn : connections) {
         conn.routed = false;
         conn.layer = -1;
     }
+
+    // Восстанавливаем линии связей (если они были удалены)
+    updateConnectionLines();
 
     drawGrid();
     ui->statusBar->showMessage("Все трассы удалены");
@@ -742,7 +841,6 @@ void MainWindow::onLayerCountChanged(int count)
     ui->statusBar->showMessage(QString("Установлено %1 слоев").arg(layerCount));
 }
 
-// Добавляем новую функцию для изменения размера платы
 void MainWindow::onBoardSizeChanged()
 {
     bool okWidth, okHeight;
@@ -780,15 +878,67 @@ void MainWindow::onBoardSizeChanged()
     }
 }
 
-// Обёртки для методов трассировки, которые теперь используют PathFinder
-QList<GridPoint> MainWindow::findPath(const GridPoint& start, const GridPoint& end, int layer)
+void MainWindow::onRemoveObstacle()
 {
-    return pathFinder.findPath(start, end, layer, grid, boardWidth, boardHeight);
+    currentMode = MODE_NONE;
+
+    for (int y = 0; y < boardHeight; y++) {
+        for (int x = 0; x < boardWidth; x++) {
+            for (int l = 0; l < layerCount; l++) {
+                if (grid[l][y][x].type == CELL_OBSTACLE) {
+                    grid[l][y][x].type = CELL_EMPTY;
+                    grid[l][y][x].color = Qt::white;
+                }
+            }
+        }
+    }
+
+    drawGrid();
+    ui->statusBar->showMessage("Все препятствия удалены");
 }
 
-bool MainWindow::canPlaceTrace(int x, int y, int layer)
+void MainWindow::setModeObstacle()
 {
-    return pathFinder.canPlaceTrace(x, y, layer, grid, boardWidth, boardHeight);
+    currentMode = MODE_OBSTACLE;
+    ui->statusBar->showMessage("Режим: установка препятствий. Кликните на ячейку.");
+}
+
+void MainWindow::setModePad()
+{
+    currentMode = MODE_PAD;
+    ui->statusBar->showMessage("Режим: установка контактных площадок. Кликните на ячейку.");
+}
+
+void MainWindow::setModeConnection()
+{
+    currentMode = MODE_CONNECTION;
+    selectedPadId = -1;
+    ui->statusBar->showMessage("Режим: создание связей. Выберите первую площадку.");
+}
+
+void MainWindow::onSetObstacle()
+{
+    setModeObstacle();
+}
+
+void MainWindow::onSetPad()
+{
+    setModePad();
+}
+
+void MainWindow::onSetConnection()
+{
+    setModeConnection();
+}
+
+QList<GridPoint> MainWindow::findPath(const GridPoint& start, const GridPoint& end, int currentPadId)
+{
+    return pathFinder.findPath(start, end, grid, boardWidth, boardHeight, layerCount, currentPadId);
+}
+
+bool MainWindow::canPlaceTrace(int x, int y, int layer, int currentPadId)
+{
+    return pathFinder.canPlaceTrace(x, y, layer, grid, boardWidth, boardHeight, currentPadId);
 }
 
 void MainWindow::placeVia(int x, int y)
@@ -801,7 +951,6 @@ void MainWindow::placeVia(int x, int y)
 
         // Сохраняем оригинальный тип если это площадка
         if (grid[l][y][x].type == CELL_PAD) {
-            // Площадка остается площадкой, но отмечаем что есть переход
             continue;
         }
 
@@ -874,57 +1023,33 @@ void MainWindow::updatePadConnections()
     }
 }
 
-void MainWindow::onRemoveObstacle()
+QColor MainWindow::getLayerColor(int layer, bool isActiveLayer)
 {
-    currentMode = MODE_NONE;
-
-    for (int y = 0; y < boardHeight; y++) {
-        for (int x = 0; x < boardWidth; x++) {
-            for (int l = 0; l < layerCount; l++) {
-                if (grid[l][y][x].type == CELL_OBSTACLE) {
-                    grid[l][y][x].type = CELL_EMPTY;
-                    grid[l][y][x].color = Qt::white;
-                }
-            }
-        }
+    if (layer < 0 || layer >= layerColors.size()) {
+        return Qt::white;
     }
 
-    drawGrid();
-    ui->statusBar->showMessage("Все препятствия удалены");
+    QColor baseColor = layerColors[layer];
+
+    if (isActiveLayer) {
+        // Яркий цвет для активного слоя
+        return baseColor.lighter(150);
+    } else {
+        // Тусклый цвет для неактивных слоев
+        QColor dimmed = baseColor.darker(200);
+        dimmed.setAlpha(150); // Полупрозрачный
+        return dimmed;
+    }
 }
 
-void MainWindow::setModeObstacle()
+void MainWindow::removeConnectionLines()
 {
-    currentMode = MODE_OBSTACLE;
-    ui->statusBar->showMessage("Режим: установка препятствий. Кликните на ячейку.");
+    // Удаляем все визуальные линии связей
+    for (Connection& conn : connections) {
+        if (conn.visualLine) {
+            scene->removeItem(conn.visualLine);
+            delete conn.visualLine;
+            conn.visualLine = nullptr;
+        }
+    }
 }
-
-void MainWindow::setModePad()
-{
-    currentMode = MODE_PAD;
-    ui->statusBar->showMessage("Режим: установка контактных площадок. Кликните на ячейку.");
-}
-
-void MainWindow::setModeConnection()
-{
-    currentMode = MODE_CONNECTION;
-    selectedPadId = -1;
-    ui->statusBar->showMessage("Режим: создание связей. Выберите первую площадку.");
-}
-
-// Обработчики кнопок (обертки для слота)
-void MainWindow::onSetObstacle()
-{
-    setModeObstacle();
-}
-
-void MainWindow::onSetPad()
-{
-    setModePad();
-}
-
-void MainWindow::onSetConnection()
-{
-    setModeConnection();
-}
-

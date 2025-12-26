@@ -1,4 +1,9 @@
+
 #include "trace.h"
+#include <queue>
+#include <vector>
+#include <unordered_map>
+#include <climits>
 #include <QDebug>
 
 // Направления для поиска (4-связность)
@@ -9,131 +14,286 @@ PathFinder::PathFinder()
 {
 }
 
-QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& end, int layer,
-                                     GridCell*** grid, int boardWidth, int boardHeight)
+// Вспомогательная функция для вычисления хэша GridPoint
+size_t hashGridPoint(const GridPoint& p) {
+    return ((static_cast<size_t>(p.layer) * 1000 + static_cast<size_t>(p.y)) * 1000 + static_cast<size_t>(p.x));
+}
+
+// Структура для сравнения GridPoint
+struct GridPointHash {
+    size_t operator()(const GridPoint& p) const {
+        return hashGridPoint(p);
+    }
+};
+
+struct GridPointEqual {
+    bool operator()(const GridPoint& a, const GridPoint& b) const {
+        return a.x == b.x && a.y == b.y && a.layer == b.layer;
+    }
+};
+
+QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& end,
+                                     GridCell*** grid, int boardWidth, int boardHeight, int totalLayers,
+                                     int currentPadId)
 {
+    qDebug() << "=== НАЧАЛО ПОИСКА ПУТИ ===";
+    qDebug() << "От: (" << start.x << "," << start.y << "," << start.layer << ")";
+    qDebug() << "До: (" << end.x << "," << end.y << "," << end.layer << ")";
+    qDebug() << "PadID:" << currentPadId;
+    qDebug() << "Размер платы:" << boardWidth << "x" << boardHeight;
+    qDebug() << "Слоев:" << totalLayers;
+
     // Проверяем границы
     if (start.x < 0 || start.x >= boardWidth || start.y < 0 || start.y >= boardHeight ||
-        end.x < 0 || end.x >= boardWidth || end.y < 0 || end.y >= boardHeight) {
+        start.layer < 0 || start.layer >= totalLayers) {
+        qDebug() << "ОШИБКА: Стартовая точка вне границ!";
         return QList<GridPoint>();
     }
 
-    // Проверяем возможность размещения трассы в начальной и конечной точках
-    if (!canPlaceTrace(start.x, start.y, layer, grid, boardWidth, boardHeight) ||
-        !canPlaceTrace(end.x, end.y, layer, grid, boardWidth, boardHeight)) {
+    if (end.x < 0 || end.x >= boardWidth || end.y < 0 || end.y >= boardHeight ||
+        end.layer < 0 || end.layer >= totalLayers) {
+        qDebug() << "ОШИБКА: Конечная точка вне границ!";
         return QList<GridPoint>();
     }
 
-    // Используем волновой алгоритм для поиска пути
-    return waveAlgorithm(start, end, layer, grid, boardWidth, boardHeight);
-}
+    // Специальная обработка для стартовой и конечной точек (площадок)
+    GridCell& startCell = grid[start.layer][start.y][start.x];
+    GridCell& endCell = grid[end.layer][end.y][end.x];
 
-bool PathFinder::canPlaceTrace(int x, int y, int layer, GridCell*** grid, int boardWidth, int boardHeight)
-{
-    // Проверяем границы
-    if (x < 0 || x >= boardWidth || y < 0 || y >= boardHeight) {
-        return false;
+    qDebug() << "Стартовая ячейка - тип:" << startCell.type << "padId:" << startCell.padId;
+    qDebug() << "Конечная ячейка - тип:" << endCell.type << "padId:" << endCell.padId;
+
+    // Стартовая точка должна быть площадкой нужного PadID
+    if (startCell.type != CELL_PAD) {
+        qDebug() << "ОШИБКА: Стартовая точка не является площадкой!";
+        return QList<GridPoint>();
     }
 
-    // Проверяем тип ячейки
-    CellType type = grid[layer][y][x].type;
-
-    // Можно разместить трассу, если ячейка пустая
-    // или это площадка (можно подключиться)
-    bool canPlace = (type == CELL_EMPTY || type == CELL_PAD || type == CELL_VIA);
-
-    return canPlace;
-}
-
-QList<GridPoint> PathFinder::waveAlgorithm(const GridPoint& start, const GridPoint& end, int layer,
-                                         GridCell*** grid, int boardWidth, int boardHeight)
-{
-    QList<GridPoint> path;
-
-    // Инициализируем матрицу расстояний
-    int** dist = new int*[static_cast<size_t>(boardHeight)];
-    for (int y = 0; y < boardHeight; y++) {
-        dist[y] = new int[static_cast<size_t>(boardWidth)];
-        for (int x = 0; x < boardWidth; x++) {
-            dist[y][x] = -1;
-        }
+    // Конечная точка должна быть площадкой
+    if (endCell.type != CELL_PAD) {
+        qDebug() << "ОШИБКА: Конечная точка не является площадкой!";
+        return QList<GridPoint>();
     }
 
-    // Очередь для волнового алгоритма
-    QList<GridPoint> queue;
-    dist[start.y][start.x] = 0;
-    queue.append(start);
-
-    // Волновой алгоритм (алгоритм Ли)
-    bool found = false;
-    while (!queue.isEmpty() && !found) {
-        GridPoint current = queue.takeFirst();
-
-        for (int i = 0; i < 4; i++) {
-            int nx = current.x + dx[i];
-            int ny = current.y + dy[i];
-
-            if (nx >= 0 && nx < boardWidth && ny >= 0 && ny < boardHeight) {
-                // Проверяем, достигли ли конечной точки или можно ли пройти через ячейку
-                if ((nx == end.x && ny == end.y) || canPlaceTrace(nx, ny, layer, grid, boardWidth, boardHeight)) {
-                    if (dist[ny][nx] == -1) {
-                        dist[ny][nx] = dist[current.y][current.x] + 1;
-                        queue.append(GridPoint(nx, ny));
-
-                        if (nx == end.x && ny == end.y) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+    // Проверяем, что стартовая площадка имеет правильный ID
+    if (startCell.padId != currentPadId) {
+        qDebug() << "ПРЕДУПРЕЖДЕНИЕ: Стартовая площадка имеет другой ID:"
+                 << startCell.padId << "ожидалось:" << currentPadId;
+        // Но продолжаем поиск, так как это может быть особенностью реализации
     }
 
-    // Восстанавливаем путь если нашли
-    if (found) {
-        path = reconstructPath(start, end, dist, boardWidth, boardHeight);
-    }
+    // Алгоритм A* для многослойной трассировки
+    std::priority_queue<HayesNode*, std::vector<HayesNode*>, CompareHayesNode> openSet;
 
-    // Очистка памяти
-    for (int y = 0; y < boardHeight; y++) {
-        delete[] dist[y];
-    }
-    delete[] dist;
+    // Используем unordered_map для gScore и cameFrom
+    std::unordered_map<GridPoint, int, GridPointHash, GridPointEqual> gScore;
+    std::unordered_map<GridPoint, GridPoint, GridPointHash, GridPointEqual> cameFrom;
 
-    return path;
-}
+    // Инициализация начального узла
+    gScore[start] = 0;
+    HayesNode* startNode = new HayesNode(start, 0, heuristic(start, end));
+    openSet.push(startNode);
 
-QList<GridPoint> PathFinder::reconstructPath(const GridPoint& start, const GridPoint& end,
-                                           int** dist, int boardWidth, int boardHeight)
-{
-    QList<GridPoint> path;
+    // Для отслеживания всех созданных узлов
+    std::vector<HayesNode*> allNodes;
+    allNodes.push_back(startNode);
 
-    GridPoint current = end;
-    while (!(current.x == start.x && current.y == start.y)) {
-        path.prepend(current);
+    int iterations = 0;
+    const int MAX_ITERATIONS = 10000; // Защита от бесконечного цикла
 
-        // Ищем предыдущую точку
-        bool foundPrev = false;
-        for (int i = 0; i < 4; i++) {
-            int nx = current.x + dx[i];
-            int ny = current.y + dy[i];
+    while (!openSet.empty() && iterations < MAX_ITERATIONS) {
+        iterations++;
 
-            if (nx >= 0 && nx < boardWidth && ny >= 0 && ny < boardHeight) {
-                if (dist[ny][nx] == dist[current.y][current.x] - 1) {
-                    current = GridPoint(nx, ny);
-                    foundPrev = true;
+        HayesNode* current = openSet.top();
+        openSet.pop();
+
+        GridPoint currentPoint = current->point;
+
+        // qDebug() << "Текущая точка:" << currentPoint.x << currentPoint.y << currentPoint.layer
+        //          << "стоимость:" << current->totalCost();
+
+        // Если достигли конечной точки (другой площадки)
+        if (currentPoint.x == end.x && currentPoint.y == end.y) {
+            qDebug() << "НАЙДЕН ПУТЬ! Итераций:" << iterations;
+
+            // Восстанавливаем путь
+            QList<GridPoint> path;
+            GridPoint node = currentPoint;
+
+            // Восстанавливаем путь от конца к началу
+            path.prepend(node);
+            while (!(node.x == start.x && node.y == start.y && node.layer == start.layer)) {
+                auto it = cameFrom.find(node);
+                if (it != cameFrom.end()) {
+                    node = it->second;
+                    path.prepend(node);
+                } else {
+                    qDebug() << "ОШИБКА: Не удалось восстановить путь!";
                     break;
                 }
             }
+
+            qDebug() << "Путь восстановлен, длина:" << path.size();
+
+            // Очистка памяти
+            for (HayesNode* n : allNodes) {
+                delete n;
+            }
+
+            qDebug() << "=== ПОИСК ЗАВЕРШЕН УСПЕШНО ===";
+            return path;
         }
 
-        if (!foundPrev) {
-            // Не удалось восстановить путь
-            return QList<GridPoint>();
+        // Получаем соседей
+        QList<GridPoint> neighbors = getNeighbors(currentPoint, grid, boardWidth, boardHeight,
+                                                 totalLayers, currentPadId);
+
+        // qDebug() << "Найдено соседей:" << neighbors.size();
+
+        for (const GridPoint& neighbor : neighbors) {
+            int tentativeGScore = gScore[currentPoint] +
+                                getTransitionCost(currentPoint, neighbor, grid, currentPadId);
+
+            auto it = gScore.find(neighbor);
+            if (it == gScore.end() || tentativeGScore < it->second) {
+                // Этот путь лучше, чем предыдущий
+                cameFrom[neighbor] = currentPoint;
+                gScore[neighbor] = tentativeGScore;
+
+                HayesNode* neighborNode = new HayesNode(neighbor, tentativeGScore,
+                                                      heuristic(neighbor, end), current);
+                openSet.push(neighborNode);
+                allNodes.push_back(neighborNode);
+            }
         }
     }
-    path.prepend(start);
 
-    return path;
+    if (iterations >= MAX_ITERATIONS) {
+        qDebug() << "ПРЕРВАНО: Превышено максимальное количество итераций!";
+    } else {
+        qDebug() << "Путь не найден. Итераций:" << iterations;
+        qDebug() << "Размер openSet:" << openSet.size();
+        qDebug() << "Размер gScore:" << gScore.size();
+    }
+
+    // Очистка памяти
+    for (HayesNode* n : allNodes) {
+        delete n;
+    }
+
+    qDebug() << "=== ПОИСК ЗАВЕРШЕН БЕЗ УСПЕХА ===";
+    return QList<GridPoint>();
+}
+
+bool PathFinder::canPlaceTrace(int x, int y, int layer, GridCell*** grid,
+                              int boardWidth, int boardHeight, int currentPadId)
+{
+    // Проверяем границы
+    if (x < 0 || x >= boardWidth || y < 0 || y >= boardHeight ||
+        layer < 0) {
+        return false;
+    }
+
+    GridCell& cell = grid[layer][y][x];
+
+    // Специальная обработка: если это площадка, она всегда доступна для трассировки
+    // Это нужно для DIP-компонентов со сквозными отверстиями
+    if (cell.type == CELL_PAD) {
+        return true; // Площадки всегда доступны для трассировки
+    }
+
+    // Для остальных типов ячеек
+    switch (cell.type) {
+    case CELL_EMPTY:
+    case CELL_VIA:
+        return true;
+
+    case CELL_TRACE:
+        // Можно пройти через трассу, только если она принадлежит тому же соединению
+        return (cell.traceId == currentPadId || cell.traceId == -1);
+
+    case CELL_OBSTACLE:
+        return false;
+
+    default:
+        return false;
+    }
+}
+
+int PathFinder::getTransitionCost(const GridPoint& from, const GridPoint& to,
+                                 GridCell*** grid, int currentPadId)
+{
+    int baseCost = 10;
+
+    GridCell& toCell = grid[to.layer][to.y][to.x];
+
+    // Дополнительная стоимость за смену слоя (переход через via)
+    if (from.layer != to.layer) {
+        baseCost += 30; // Высокая стоимость за переход между слоями
+    }
+
+    // Дополнительная стоимость за поворот (диагональное движение не разрешено, так что это всегда прямой путь)
+    // if (from.x != to.x && from.y != to.y) {
+    //     baseCost += 5;
+    // }
+
+    // Дополнительная стоимость за проход через via
+    if (toCell.type == CELL_VIA) {
+        baseCost += 10;
+    }
+
+    // Дешевле идти по пустым ячейкам
+    if (toCell.type == CELL_EMPTY) {
+        baseCost -= 2;
+    }
+
+    // Еще дешевле идти по тем же трассам
+    if (toCell.type == CELL_TRACE && toCell.traceId == currentPadId) {
+        baseCost -= 5;
+    }
+
+    return baseCost;
+}
+
+int PathFinder::heuristic(const GridPoint& a, const GridPoint& b)
+{
+    // Манхэттенское расстояние + стоимость смены слоев
+    int manhattan = abs(a.x - b.x) + abs(a.y - b.y);
+    int layerDiff = abs(a.layer - b.layer) * 30; // Умножаем на 30, т.к. смена слоя дорогая
+
+    return manhattan * 10 + layerDiff;
+}
+
+QList<GridPoint> PathFinder::getNeighbors(const GridPoint& point, GridCell*** grid,
+                                         int boardWidth, int boardHeight, int totalLayers,
+                                         int currentPadId)
+{
+    QList<GridPoint> neighbors;
+
+    // Соседи в той же плоскости (4 направления)
+    for (int i = 0; i < 4; i++) {
+        int nx = point.x + dx[i];
+        int ny = point.y + dy[i];
+
+        if (nx >= 0 && nx < boardWidth && ny >= 0 && ny < boardHeight) {
+            if (canPlaceTrace(nx, ny, point.layer, grid, boardWidth, boardHeight, currentPadId)) {
+                neighbors.append(GridPoint(nx, ny, point.layer));
+                // qDebug() << "  Сосед на том же слое:" << nx << ny << point.layer;
+            }
+        }
+    }
+
+    // Соседи на других слоях (вертикальные переходы через via)
+    // Разрешаем переходы на все слои
+    for (int layer = 0; layer < totalLayers; layer++) {
+        if (layer != point.layer) {
+            // Проверяем, можно ли перейти на этот слой
+            if (canPlaceTrace(point.x, point.y, layer, grid, boardWidth, boardHeight, currentPadId)) {
+                neighbors.append(GridPoint(point.x, point.y, layer));
+                // qDebug() << "  Сосед на другом слое:" << point.x << point.y << layer;
+            }
+        }
+    }
+
+    return neighbors;
 }
