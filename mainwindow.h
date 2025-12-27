@@ -132,9 +132,9 @@ void updateTraceLinesForCurrentLayer();
     void updateConnectionLines();
 
     // Методы для работы с трассировкой (с новой сигнатурой)
-    QList<GridPoint> findPath(const GridPoint& start, const GridPoint& end, int currentPadId);
-    bool canPlaceTrace(int x, int y, int layer, int currentPadId);
+    QList<GridPoint> findPath(const GridPoint& start, const GridPoint& end, int fromPadId, int toPadId);
     void placeVia(int x, int y);
+    bool canPlaceTrace(int x, int y, int layer, int fromPadId, int toPadId);
 
     // Новые методы для алгоритма Хейса
     void performMultilayerRouting();

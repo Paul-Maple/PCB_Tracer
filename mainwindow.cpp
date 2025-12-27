@@ -442,48 +442,37 @@ void MainWindow::onCellClicked(int x, int y)
             return;
         }
 
-        // Создаем диалоговое окно для ввода имени площадки
-        bool ok;
-        QString name = QInputDialog::getText(
-            this,
-            "Контактная площадка",
-            "Введите имя площадки:",
-            QLineEdit::Normal,
-            QString("PAD%1").arg(nextPadId),
-            &ok
-        );
+        // УБИРАЕМ ДИАЛОГОВОЕ ОКНО и используем автоматическое имя
+        QString name = QString("PAD%1").arg(nextPadId);
 
-        // Устанавливаем минимальный размер для диалога
-        if (ok && !name.isEmpty()) {
-            Pad pad;
-            pad.id = nextPadId;
-            pad.x = x;
-            pad.y = y;
-            pad.name = name;
+        Pad pad;
+        pad.id = nextPadId;
+        pad.x = x;
+        pad.y = y;
+        pad.name = name;
 
-            // Генерируем случайный цвет для площадки
-            static int hue = 0;
-            pad.color = QColor::fromHsv(hue, 180, 220);
-            hue = (hue + 40) % 360;
+        // Генерируем случайный цвет для площадки
+        static int hue = 0;
+        pad.color = QColor::fromHsv(hue, 180, 220);
+        hue = (hue + 40) % 360;
 
-            // Добавляем площадку в список
-            pads.append(pad);
+        // Добавляем площадку в список
+        pads.append(pad);
 
-            // Установка на всех слоях
-            for (int l = 0; l < layerCount; l++) {
-                grid[l][y][x].type = CELL_PAD;
-                grid[l][y][x].padId = pad.id;
-                grid[l][y][x].color = pad.color;
-                grid[l][y][x].traceId = -1;
-            }
-
-            nextPadId++; // Увеличиваем ID для следующей площадки
-
-            updateCellDisplay(x, y);
-            ui->statusBar->showMessage(
-                QString("Добавлена площадка %1 в (%2, %3)")
-                .arg(name).arg(x).arg(y));
+        // Установка на всех слоях
+        for (int l = 0; l < layerCount; l++) {
+            grid[l][y][x].type = CELL_PAD;
+            grid[l][y][x].padId = pad.id;
+            grid[l][y][x].color = pad.color;
+            grid[l][y][x].traceId = -1;
         }
+
+        nextPadId++; // Увеличиваем ID для следующей площадки
+
+        updateCellDisplay(x, y);
+        ui->statusBar->showMessage(
+            QString("Добавлена площадка %1 в (%2, %3)")
+            .arg(name).arg(x).arg(y));
         break;
     }
 
@@ -598,11 +587,12 @@ void MainWindow::onRoute()
     ui->statusBar->showMessage("Трассировка завершена");
 }
 
+// Исправьте вызов findPath в performMultilayerRouting:
 void MainWindow::performMultilayerRouting()
 {
     int routedCount = 0;
 
-    // Сортируем соединения по сложности (по расстоянию между площадками)
+    // Сортируем соединения по сложности
     QList<Connection> sortedConnections = connections;
     std::sort(sortedConnections.begin(), sortedConnections.end(),
               [this](const Connection& a, const Connection& b) {
@@ -616,13 +606,14 @@ void MainWindow::performMultilayerRouting()
                   int distA = abs(padA1->x - padA2->x) + abs(padA1->y - padA2->y);
                   int distB = abs(padB1->x - padB2->x) + abs(padB1->y - padB2->y);
 
-                  return distA < distB; // Сначала простые соединения
+                  return distA < distB;
               });
 
     qDebug() << "Начинаем трассировку" << sortedConnections.size() << "соединений";
 
     // Трассируем каждое соединение
-    for (Connection& conn : sortedConnections) {
+    for (int connIndex = 0; connIndex < sortedConnections.size(); connIndex++) {
+        Connection& conn = sortedConnections[connIndex];
         Pad* fromPad = getPadById(conn.fromPadId);
         Pad* toPad = getPadById(conn.toPadId);
 
@@ -631,79 +622,73 @@ void MainWindow::performMultilayerRouting()
             continue;
         }
 
-        qDebug() << "Трассируем соединение от" << fromPad->name << "(ID:" << fromPad->id
-                 << ") до" << toPad->name << "(ID:" << toPad->id << ")";
+        qDebug() << "Трассируем соединение" << connIndex << "от" << fromPad->name
+                 << "(ID:" << fromPad->id << ") до" << toPad->name << "(ID:" << toPad->id << ")";
 
-        // Ищем путь с использованием алгоритма Хейса
-        // Начинаем от первой площадки
+        // Инициализируем точки начала и конца
         GridPoint start(fromPad->x, fromPad->y, 0);
-
-        // Цель - вторая площадка
-        // ВАЖНО: передаем ID первой площадки (fromPad->id) для поиска пути,
-        // потому что трасса принадлежит этому соединению
         GridPoint end(toPad->x, toPad->y, 0);
 
-        QList<GridPoint> path = findPath(start, end, fromPad->id);
+        // ВАЖНО: передаем ОБА ID площадок
+        QList<GridPoint> path = findPath(start, end, fromPad->id, toPad->id);
 
         qDebug() << "Найден путь длиной:" << path.size();
 
         if (!path.isEmpty()) {
-                // Прокладываем трассу по найденному пути
-                for (int i = 0; i < path.size(); i++) {
-                    GridPoint point = path[i];
+            // Прокладываем трассу по найденному пути
+            for (int i = 0; i < path.size(); i++) {
+                GridPoint point = path[i];
 
-                    // Убедимся, что точка в пределах сетки
-                    if (point.x < 0 || point.x >= boardWidth ||
-                        point.y < 0 || point.y >= boardHeight ||
-                        point.layer < 0 || point.layer >= layerCount) {
-                        qDebug() << "Точка пути вне границ:" << point.x << point.y << point.layer;
-                        continue;
-                    }
+                // Проверяем границы
+                if (point.x < 0 || point.x >= boardWidth ||
+                    point.y < 0 || point.y >= boardHeight ||
+                    point.layer < 0 || point.layer >= layerCount) {
+                    qDebug() << "Точка пути вне границ:" << point.x << point.y << point.layer;
+                    continue;
+                }
 
-                    GridCell& cell = grid[point.layer][point.y][point.x];
+                GridCell& cell = grid[point.layer][point.y][point.x];
 
-                    // НЕ устанавливаем тип CELL_TRACE для ячеек
-                    // Трассы будут отображаться только линиями
-                    // Записываем информацию о трассе в ячейку
-                    if (cell.type != CELL_PAD) {
-                        cell.type = CELL_TRACE;
-                        cell.traceId = fromPad->id; // ID первой площадки как идентификатор трассы
-                        cell.layer = point.layer;
-                        // Не устанавливаем цвет, так как ячейки трасс остаются белыми
-                    }
+                // Если это не площадка и не via, отмечаем как трассу
+                if (cell.type != CELL_PAD && cell.type != CELL_VIA) {
+                    cell.type = CELL_TRACE;
+                    // Сохраняем идентификатор соединения (ID первой площадки)
+                    cell.traceId = fromPad->id;
+                }
 
-                    // Если это переход между слоями, отмечаем как VIA
-                    if (i > 0 && path[i-1].layer != point.layer) {
-                        qDebug() << "Переход между слоями" << path[i-1].layer << "->" << point.layer;
+                // Обработка переходов между слоями
+                if (i > 0 && path[i-1].layer != point.layer) {
+                    qDebug() << "Переход между слоями" << path[i-1].layer << "->" << point.layer;
 
-                        // Делаем via на всех промежуточных слоях
-                        int minLayer = qMin(path[i-1].layer, point.layer);
-                        int maxLayer = qMax(path[i-1].layer, point.layer);
+                    // Делаем via на всех промежуточных слоях
+                    int minLayer = qMin(path[i-1].layer, point.layer);
+                    int maxLayer = qMax(path[i-1].layer, point.layer);
 
-                        for (int l = minLayer; l <= maxLayer; l++) {
-                            if (l >= 0 && l < layerCount) {
-                                if (grid[l][point.y][point.x].type != CELL_PAD) {
-                                    grid[l][point.y][point.x].type = CELL_VIA;
-                                    grid[l][point.y][point.x].color = Qt::black;
-                                }
+                    for (int l = minLayer; l <= maxLayer; l++) {
+                        if (l >= 0 && l < layerCount) {
+                            if (grid[l][point.y][point.x].type != CELL_PAD) {
+                                grid[l][point.y][point.x].type = CELL_VIA;
+                                grid[l][point.y][point.x].color = Qt::black;
                             }
                         }
                     }
-
-                    updateCellDisplay(point.x, point.y, point.layer);
                 }
 
-                // Рисуем линии трасс
-                for (int i = 0; i < path.size() - 1; i++) {
-                    drawTraceLine(path[i], path[i + 1], path[i].layer);
-                }
+                updateCellDisplay(point.x, point.y, point.layer);
+            }
 
-                conn.routed = true;
-                conn.layer = path.last().layer;
-                routedCount++;
+            // Рисуем линии трасс
+            for (int i = 0; i < path.size() - 1; i++) {
+                drawTraceLine(path[i], path[i + 1], path[i].layer);
+            }
 
-                qDebug() << "Соединение" << fromPad->name << "-" << toPad->name << "проложено";
-            } else {
+            // Обновляем информацию о соединении
+            conn.routed = true;
+            conn.layer = path.last().layer;
+            routedCount++;
+
+            qDebug() << "Соединение" << fromPad->name << "-" << toPad->name << "проложено";
+        } else {
             qDebug() << "Не удалось найти путь для соединения" << fromPad->name << "-" << toPad->name;
             ui->statusBar->showMessage(QString("Не удалось найти путь для соединения %1-%2")
                 .arg(fromPad->name).arg(toPad->name));
@@ -931,14 +916,15 @@ void MainWindow::onSetConnection()
     setModeConnection();
 }
 
-QList<GridPoint> MainWindow::findPath(const GridPoint& start, const GridPoint& end, int currentPadId)
+// Исправьте объявления функций в конце mainwindow.cpp:
+QList<GridPoint> MainWindow::findPath(const GridPoint& start, const GridPoint& end, int fromPadId, int toPadId)
 {
-    return pathFinder.findPath(start, end, grid, boardWidth, boardHeight, layerCount, currentPadId);
+    return pathFinder.findPath(start, end, grid, boardWidth, boardHeight, layerCount, fromPadId, toPadId);
 }
 
-bool MainWindow::canPlaceTrace(int x, int y, int layer, int currentPadId)
+bool MainWindow::canPlaceTrace(int x, int y, int layer, int fromPadId, int toPadId)
 {
-    return pathFinder.canPlaceTrace(x, y, layer, grid, boardWidth, boardHeight, currentPadId);
+    return pathFinder.canPlaceTrace(x, y, layer, grid, boardWidth, boardHeight, fromPadId, toPadId);
 }
 
 void MainWindow::placeVia(int x, int y)
