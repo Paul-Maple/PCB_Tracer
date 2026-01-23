@@ -5,6 +5,7 @@
 #include <QPoint>
 #include <QColor>
 #include <QSet>
+#include <functional>  // Добавьте этот заголовок
 
 // Типы ячеек сетки
 enum CellType {
@@ -64,6 +65,20 @@ struct CompareHayesNode {
     }
 };
 
+// Для хэширования GridPoint
+struct GridPointHash {
+    std::size_t operator()(const GridPoint& p) const {
+        return std::hash<int>()(p.x) ^ (std::hash<int>()(p.y) << 1) ^ (std::hash<int>()(p.layer) << 2);
+    }
+};
+
+// Для сравнения GridPoint
+struct GridPointEqual {
+    bool operator()(const GridPoint& a, const GridPoint& b) const {
+        return a.x == b.x && a.y == b.y && a.layer == b.layer;
+    }
+};
+
 class PathFinder
 {
 public:
@@ -72,15 +87,16 @@ public:
     // Основная функция поиска пути (многослойная трассировка Хейса)
     QList<GridPoint> findPath(const GridPoint& start, const GridPoint& end,
                              GridCell*** grid, int boardWidth, int boardHeight, int totalLayers,
-                             int fromPadId, int toPadId);  // ДВА параметра вместо одного
+                             int fromPadId, int toPadId);
 
     // Проверка возможности размещения трассы
     bool canPlaceTrace(int x, int y, int layer, GridCell*** grid,
-                      int boardWidth, int boardHeight, int fromPadId, int toPadId);  // ДВА параметра
+                      int boardWidth, int boardHeight, int totalLayers,
+                      int fromPadId, int toPadId);
 
     // Получение стоимости перехода между ячейками
     int getTransitionCost(const GridPoint& from, const GridPoint& to,
-                         GridCell*** grid, int fromPadId, int toPadId);
+                         GridCell*** grid, int fromPadId, int toPadId);  // ИСПРАВЛЕНО: добавлен toPadId
 
     // Эвристическая функция (Манхэттенское расстояние с учетом слоев)
     int heuristic(const GridPoint& a, const GridPoint& b);

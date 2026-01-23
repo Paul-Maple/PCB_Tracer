@@ -13,24 +13,6 @@ PathFinder::PathFinder()
 {
 }
 
-// Вспомогательная функция для вычисления хэша GridPoint
-size_t hashGridPoint(const GridPoint& p) {
-    return ((static_cast<size_t>(p.layer) * 1000 + static_cast<size_t>(p.y)) * 1000 + static_cast<size_t>(p.x));
-}
-
-// Структура для сравнения GridPoint
-struct GridPointHash {
-    size_t operator()(const GridPoint& p) const {
-        return hashGridPoint(p);
-    }
-};
-
-struct GridPointEqual {
-    bool operator()(const GridPoint& a, const GridPoint& b) const {
-        return a.x == b.x && a.y == b.y && a.layer == b.layer;
-    }
-};
-
 QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& end,
                                      GridCell*** grid, int boardWidth, int boardHeight, int totalLayers,
                                      int fromPadId, int toPadId)
@@ -40,7 +22,7 @@ QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& e
     qDebug() << "До: (" << end.x << "," << end.y << "," << end.layer << ")";
     qDebug() << "FromPadID:" << fromPadId << "ToPadID:" << toPadId;
     qDebug() << "Размер платы:" << boardWidth << "x" << boardHeight;
-    qDebug() << "Слоев:" << totalLayers;
+    qDebug() << "Доступно слоев:" << totalLayers;
 
     // Проверяем границы
     if (start.x < 0 || start.x >= boardWidth || start.y < 0 || start.y >= boardHeight ||
@@ -74,10 +56,6 @@ QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& e
         return QList<GridPoint>();
     }
 
-    // ВАЖНО: Используем fromPadId как идентификатор трассы для этого соединения
-    // Но разрешаем доступ к обеим площадкам (fromPadId и toPadId)
-    int traceId = fromPadId;
-
     // Алгоритм A* для многослойной трассировки
     std::priority_queue<HayesNode*, std::vector<HayesNode*>, CompareHayesNode> openSet;
 
@@ -95,7 +73,7 @@ QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& e
     allNodes.push_back(startNode);
 
     int iterations = 0;
-    const int MAX_ITERATIONS = 10000; // Защита от бесконечного цикла
+    const int MAX_ITERATIONS = 50000; // Увеличили лимит
 
     while (!openSet.empty() && iterations < MAX_ITERATIONS) {
         iterations++;
@@ -105,9 +83,11 @@ QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& e
 
         GridPoint currentPoint = current->point;
 
-        // Если достигли конечной точки (другой площадки)
+        // Если достигли конечной точки
         if (currentPoint.x == end.x && currentPoint.y == end.y) {
             qDebug() << "НАЙДЕН ПУТЬ! Итераций:" << iterations;
+            qDebug() << "Длина пути:" << gScore[currentPoint] / 10 << "шагов";
+            qDebug() << "Финальный слой:" << currentPoint.layer;
 
             // Восстанавливаем путь
             QList<GridPoint> path;
@@ -126,7 +106,18 @@ QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& e
                 }
             }
 
-            qDebug() << "Путь восстановлен, длина:" << path.size();
+            qDebug() << "Путь восстановлен, точек:" << path.size();
+
+            // Собираем статистику по слоям
+            QMap<int, int> layerStats;
+            for (const GridPoint& p : path) {
+                layerStats[p.layer]++;
+            }
+
+            qDebug() << "Распределение по слоям:";
+            for (auto it = layerStats.begin(); it != layerStats.end(); ++it) {
+                qDebug() << "  Слой" << it.key() << ":" << it.value() << "точек";
+            }
 
             // Очистка памяти
             for (HayesNode* n : allNodes) {
@@ -163,8 +154,6 @@ QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& e
         qDebug() << "ПРЕРВАНО: Превышено максимальное количество итераций!";
     } else {
         qDebug() << "Путь не найден. Итераций:" << iterations;
-        qDebug() << "Размер openSet:" << openSet.size();
-        qDebug() << "Размер gScore:" << gScore.size();
     }
 
     // Очистка памяти
@@ -177,11 +166,12 @@ QList<GridPoint> PathFinder::findPath(const GridPoint& start, const GridPoint& e
 }
 
 bool PathFinder::canPlaceTrace(int x, int y, int layer, GridCell*** grid,
-                              int boardWidth, int boardHeight, int fromPadId, int toPadId)
+                              int boardWidth, int boardHeight, int totalLayers,
+                              int fromPadId, int toPadId)
 {
     // Проверяем границы
     if (x < 0 || x >= boardWidth || y < 0 || y >= boardHeight ||
-        layer < 0 || layer >= boardHeight) {
+        layer < 0 || layer >= totalLayers) {
         return false;
     }
 
@@ -192,23 +182,28 @@ bool PathFinder::canPlaceTrace(int x, int y, int layer, GridCell*** grid,
         return (cell.padId == fromPadId || cell.padId == toPadId);
     }
 
-    // Для остальных типов ячеек
-    switch (cell.type) {
-    case CELL_EMPTY:
-    case CELL_VIA:
-        return true;
-
-    case CELL_TRACE:
-        // Можно пройти через трассу, только если она принадлежит тому же соединению
-        // Используем fromPadId как идентификатор трассы
-        return (cell.traceId == fromPadId || cell.traceId == -1);
-
-    case CELL_OBSTACLE:
-        return false;
-
-    default:
+    // Для препятствий
+    if (cell.type == CELL_OBSTACLE) {
         return false;
     }
+
+    // Для трасс: можно использовать только если они свободны (traceId == -1)
+    // или принадлежат этому же соединению
+    if (cell.type == CELL_TRACE) {
+        return (cell.traceId == -1 || cell.traceId == fromPadId);
+    }
+
+    // Для VIA: аналогично
+    if (cell.type == CELL_VIA) {
+        return (cell.traceId == -1 || cell.traceId == fromPadId);
+    }
+
+    // Пустые ячейки всегда доступны
+    if (cell.type == CELL_EMPTY) {
+        return true;
+    }
+
+    return false;
 }
 
 int PathFinder::getTransitionCost(const GridPoint& from, const GridPoint& to,
@@ -216,38 +211,52 @@ int PathFinder::getTransitionCost(const GridPoint& from, const GridPoint& to,
 {
     int baseCost = 10;
 
+    // Штраф за смену слоя
+    if (from.layer != to.layer) {
+        baseCost += 10;  // Уменьшенный штраф
+    }
+
     GridCell& toCell = grid[to.layer][to.y][to.x];
 
-    // Дополнительная стоимость за смену слоя (переход через via)
-    if (from.layer != to.layer) {
-        baseCost += 30; // Высокая стоимость за переход между слоями
+    // Меньший штраф за занятые ячейки
+    if (toCell.type == CELL_TRACE && toCell.traceId != fromPadId) {
+        baseCost += 100;
     }
 
-    // Дополнительная стоимость за проход через via
-    if (toCell.type == CELL_VIA) {
-        baseCost += 10;
+    if (toCell.type == CELL_VIA && toCell.traceId != fromPadId) {
+        baseCost += 100;
     }
 
-    // Дешевле идти по пустым ячейкам
+    // Поощряем использование пустых ячеек
     if (toCell.type == CELL_EMPTY) {
         baseCost -= 2;
     }
 
-    // Еще дешевле идти по тем же трассам
+    // Свои трассы почти бесплатны
     if (toCell.type == CELL_TRACE && toCell.traceId == fromPadId) {
-        baseCost -= 5;
+        baseCost = 1;
     }
 
-    return baseCost;
+    // Обработка площадок
+    if (toCell.type == CELL_PAD) {
+        if (toCell.padId == fromPadId || toCell.padId == toPadId) {
+            baseCost = 0;
+        } else {
+            baseCost += 1000;
+        }
+    }
+
+    return qMax(1, baseCost);
 }
 
 int PathFinder::heuristic(const GridPoint& a, const GridPoint& b)
 {
-    // Манхэттенское расстояние + стоимость смены слоев
+    // Более простая и быстрая эвристика
     int manhattan = abs(a.x - b.x) + abs(a.y - b.y);
-    int layerDiff = abs(a.layer - b.layer) * 30; // Умножаем на 30, т.к. смена слоя дорогая
+    int layerDiff = abs(a.layer - b.layer);
 
-    return manhattan * 10 + layerDiff;
+    // Упрощенная формула
+    return manhattan * 5 + layerDiff * 10;
 }
 
 QList<GridPoint> PathFinder::getNeighbors(const GridPoint& point, GridCell*** grid,
@@ -262,18 +271,18 @@ QList<GridPoint> PathFinder::getNeighbors(const GridPoint& point, GridCell*** gr
         int ny = point.y + dy[i];
 
         if (nx >= 0 && nx < boardWidth && ny >= 0 && ny < boardHeight) {
-            if (canPlaceTrace(nx, ny, point.layer, grid, boardWidth, boardHeight, fromPadId, toPadId)) {
+            if (canPlaceTrace(nx, ny, point.layer, grid, boardWidth, boardHeight, totalLayers, fromPadId, toPadId)) {
                 neighbors.append(GridPoint(nx, ny, point.layer));
             }
         }
     }
 
     // Соседи на других слоях (вертикальные переходы через via)
-    // Разрешаем переходы на все слои
     for (int layer = 0; layer < totalLayers; layer++) {
         if (layer != point.layer) {
-            // Проверяем, можно ли перейти на этот слой
-            if (canPlaceTrace(point.x, point.y, layer, grid, boardWidth, boardHeight, fromPadId, toPadId)) {
+            // Проверяем возможность перехода между слоями
+            if (canPlaceTrace(point.x, point.y, layer, grid, boardWidth,
+                            boardHeight, totalLayers, fromPadId, toPadId)) {
                 neighbors.append(GridPoint(point.x, point.y, layer));
             }
         }
