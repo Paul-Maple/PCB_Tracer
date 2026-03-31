@@ -12,13 +12,15 @@ SOURCES += \
     mainwindow.cpp \
     trace.cpp \
     helpdialog.cpp \
-    multi_trace.cpp  # Только этот файл, fixes.cpp удален
+    multi_trace.cpp \
+    file_io.cpp
 
 HEADERS += \
     mainwindow.h \
     trace.h \
     helpdialog.h \
-    multi_trace.h
+    multi_trace.h \
+    file_io.h
 
 FORMS += \
     mainwindow.ui \

@@ -26,6 +26,8 @@
 #include <QFutureSynchronizer>
 #include <QTextBrowser>
 #include "routingtask.h"
+#include <QFileDialog>
+#include "file_io.h"
 
 void CustomGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
@@ -105,6 +107,8 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::onLayerCountChanged);
     connect(ui->autoFillBtn, &QPushButton::clicked, this, &MainWindow::onAutoFill);
 
+    connect(ui->loadFileBtn, &QPushButton::clicked, this, &MainWindow::onLoadFile);
+    connect(ui->saveFileBtn, &QPushButton::clicked, this, &MainWindow::onSaveFile);
     // Инициализация сетки - теперь scene уже создана
     initGrid();
     drawGrid();
@@ -3827,4 +3831,134 @@ void MainWindow::retryFailedConnections()
     }
 
     qDebug() << "Повторная трассировка завершена. Успешно:" << retrySuccess << "из" << failedConns.size();
+}
+
+void MainWindow::onLoadFile() {
+    QString fileName = QFileDialog::getOpenFileName(this, "Загрузить данные платы", "", "PCB Trace Files (*.pcb_trace);;All Files (*)");
+    if (fileName.isEmpty()) return;
+
+    BoardData data;
+    if (!loadBoardData(fileName, data)) {
+        QMessageBox::warning(this, "Ошибка", "Не удалось загрузить файл");
+        return;
+    }
+
+    loadBoardDataToState(data);
+    ui->statusBar->showMessage("Данные загружены из " + fileName);
+}
+
+void MainWindow::onSaveFile() {
+    QString fileName = QFileDialog::getSaveFileName(this, "Сохранить данные платы", "", "PCB Trace Files (*.pcb_trace);;All Files (*)");
+    if (fileName.isEmpty()) return;
+
+    BoardData data;
+    data.width = boardWidth;
+    data.height = boardHeight;
+    data.layerCount = layerCount;
+
+    for (const Pad& pad : pads) {
+        PadData pd;
+        pd.id = pad.id;
+        pd.x = pad.x;
+        pd.y = pad.y;
+        pd.name = pad.name;
+        data.pads.append(pd);
+    }
+
+    for (int l = 0; l < layerCount; ++l) {
+        for (int y = 0; y < boardHeight; ++y) {
+            for (int x = 0; x < boardWidth; ++x) {
+                if (grid[l][y][x].type == CELL_OBSTACLE) {
+                    ObstacleData od;
+                    od.x = x;
+                    od.y = y;
+                    od.layer = l;
+                    data.obstacles.append(od);
+                }
+            }
+        }
+    }
+
+    for (const Connection& conn : connections) {
+        ConnectionData cd;
+        cd.fromPadId = conn.fromPadId;
+        cd.toPadId = conn.toPadId;
+        data.connections.append(cd);
+    }
+
+    if (!saveBoardData(fileName, data)) {
+        QMessageBox::warning(this, "Ошибка", "Не удалось сохранить файл");
+        return;
+    }
+
+    ui->statusBar->showMessage("Данные сохранены в " + fileName);
+}
+
+void MainWindow::loadBoardDataToState(const BoardData& data) {
+    clearGrid();
+
+    boardWidth = data.width;
+    boardHeight = data.height;
+    layerCount = data.layerCount;
+
+    initGrid();
+
+    // Препятствия
+    for (const ObstacleData& obs : data.obstacles) {
+        if (obs.x >= 0 && obs.x < boardWidth && obs.y >= 0 && obs.y < boardHeight && obs.layer >= 0 && obs.layer < layerCount) {
+            grid[obs.layer][obs.y][obs.x].type = CELL_OBSTACLE;
+            grid[obs.layer][obs.y][obs.x].color = Qt::darkGray;
+        }
+    }
+
+    // Площадки
+    pads.clear();
+    int maxId = 0;
+    for (const PadData& pd : data.pads) {
+        if (pd.x >= 0 && pd.x < boardWidth && pd.y >= 0 && pd.y < boardHeight) {
+            Pad pad;
+            pad.id = pd.id;
+            pad.x = pd.x;
+            pad.y = pd.y;
+            pad.name = pd.name;
+            pad.color = QColor::fromHsv((pad.id * 40) % 360, 180, 220);
+            pads.append(pad);
+
+            for (int l = 0; l < layerCount; ++l) {
+                grid[l][pad.y][pad.x].type = CELL_PAD;
+                grid[l][pad.y][pad.x].padId = pad.id;
+                grid[l][pad.y][pad.x].color = pad.color;
+                grid[l][pad.y][pad.x].traceId = -1;
+            }
+
+            if (pad.id > maxId) maxId = pad.id;
+        }
+    }
+    nextPadId = maxId + 1;
+
+    // Связи
+    connections.clear();
+    for (const ConnectionData& cd : data.connections) {
+        bool fromExists = false, toExists = false;
+        for (const Pad& pad : pads) {
+            if (pad.id == cd.fromPadId) fromExists = true;
+            if (pad.id == cd.toPadId) toExists = true;
+        }
+        if (fromExists && toExists) {
+            Connection conn;
+            conn.fromPadId = cd.fromPadId;
+            conn.toPadId = cd.toPadId;
+            conn.routed = false;
+            conn.layer = -1;
+            conn.visualLine = nullptr;
+            connections.append(conn);
+        }
+    }
+
+    updatePadConnections();
+    createLayerRadioButtons();
+    drawGrid();
+    updateConnectionLines();
+
+    selectedPadId = -1;
 }

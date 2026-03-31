@@ -29,6 +29,7 @@
 #include "trace.h"
 #include "helpdialog.h"
 #include "multi_trace.h"
+#include "file_io.h"
 
 namespace Ui {
 class MainWindow;
@@ -100,6 +101,10 @@ private slots:
     void onMultiThreadRoutingProgress(int percent);
     void onMultiThreadRoutingComplete();
     void onMultiThreadRoutingError(const QString& message);
+
+    void loadBoardDataToState(const BoardData& data);
+    void onLoadFile();
+    void onSaveFile();
 
     // Режимы работы
     void setModeObstacle();

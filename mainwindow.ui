@@ -271,6 +271,32 @@
                </property>
               </widget>
              </item>
+			 <item>
+			 <widget class="QPushButton" name="loadFileBtn">
+			  <property name="minimumSize">
+			   <size>
+				<width>0</width>
+				<height>45</height>
+			   </size>
+			  </property>
+			  <property name="text">
+			   <string>Загрузить из файла</string>
+			  </property>
+			 </widget>
+			</item>
+			<item>
+			 <widget class="QPushButton" name="saveFileBtn">
+			  <property name="minimumSize">
+			   <size>
+				<width>0</width>
+				<height>45</height>
+			   </size>
+			  </property>
+			  <property name="text">
+			   <string>Сохранить в файл</string>
+			  </property>
+			 </widget>
+			</item>
             </layout>
            </widget>
           </item>
